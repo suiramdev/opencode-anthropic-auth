@@ -1,229 +1,206 @@
-import type { Plugin } from '@opencode-ai/plugin'
-import { authorize, exchange } from './auth.ts'
-import { CLIENT_ID, TOKEN_URL } from './constants.ts'
+import { Credential, Integration, Plugin } from '@opencode-ai/plugin'
+import { Money } from '@opencode-ai/schema/money'
+import { authorize, exchange, refreshTokens } from './auth.ts'
 import {
-  createStrippedStream,
-  isInsecure,
-  mergeHeaders,
-  rewriteRequestBody,
-  rewriteUrl,
-  setOAuthHeaders,
-} from './transform.ts'
+  AUTH_MODE_KEY,
+  type AuthMode,
+  INTEGRATION_ID,
+  METHOD_CONSOLE,
+  METHOD_MAX,
+  PLUGIN_ID,
+} from './constants.ts'
 
-export const AnthropicAuthPlugin: Plugin = async ({ client }) => {
-  return {
-    auth: {
-      provider: 'anthropic',
-      async loader(
-        getAuth: () => Promise<{
-          type: string
-          access?: string
-          refresh?: string
-          expires?: number
-        }>,
-        provider: { models: Record<string, { cost: unknown }> },
-      ) {
-        const auth = await getAuth()
-        if (auth.type === 'oauth') {
-          // zero out cost for max plan
-          for (const model of Object.values(provider.models)) {
-            model.cost = {
-              input: 0,
-              output: 0,
-              cache: {
-                read: 0,
-                write: 0,
-              },
-            }
-          }
+/** Native provider package this plugin swaps in for OAuth connections. */
+const PROVIDER_PACKAGE = new URL('./provider.js', import.meta.url).href
 
-          // Shared inflight refresh promise — prevents concurrent token refreshes
-          // from racing against each other (and causing 401 cascades with token rotation)
-          let refreshPromise: Promise<string> | null = null
+const MAX_METHOD = Integration.MethodID.make(METHOD_MAX)
+const CONSOLE_METHOD = Integration.MethodID.make(METHOD_CONSOLE)
 
+const FREE = {
+  input: Money.USDPerMillionTokens.zero,
+  output: Money.USDPerMillionTokens.zero,
+  cache: {
+    read: Money.USDPerMillionTokens.zero,
+    write: Money.USDPerMillionTokens.zero,
+  },
+} as const
+
+export default Plugin.define({
+  id: PLUGIN_ID,
+  setup: async (ctx) => {
+    /**
+     * Auth mode of the active `anthropic` connection, or `undefined` when it
+     * is not one of ours (no connection, or a plain API key).
+     *
+     * The catalog transform below is synchronous, so the mode is resolved
+     * ahead of time and refreshed whenever the connection changes.
+     */
+    let mode: AuthMode | undefined
+
+    const readMode = async () => {
+      const connection = await ctx.integration.connection.active(INTEGRATION_ID)
+      if (!connection) return undefined
+      const credential = await ctx.integration.connection.resolve(connection)
+      if (credential?.type !== 'oauth') return undefined
+      if (credential.methodID === MAX_METHOD) return 'oauth' as const
+      if (credential.methodID === CONSOLE_METHOD) return 'api-key' as const
+      return undefined
+    }
+
+    await ctx.integration.transform((integrations) => {
+      integrations.method.update({
+        integrationID: INTEGRATION_ID,
+        method: {
+          id: MAX_METHOD,
+          type: 'oauth',
+          label: 'Claude Pro/Max',
+        },
+        authorize: async () => {
+          const result = await authorize('max')
           return {
-            apiKey: '',
-            async fetch(input: string | URL | Request, init?: RequestInit) {
-              const auth = await getAuth()
-              if (auth.type !== 'oauth') return fetch(input, init)
-              if (!auth.access || !auth.expires || auth.expires < Date.now()) {
-                if (!refreshPromise) {
-                  refreshPromise = (async () => {
-                    const maxRetries = 2
-                    const baseDelayMs = 500
+            mode: 'code',
+            url: result.url,
+            instructions: 'Paste the authorization code here:',
+            callback: async (code: string) =>
+              credentialFrom(MAX_METHOD, 'oauth', code, result),
+          }
+        },
+        // OpenCode refreshes within five minutes of expiry and persists the
+        // rotated pair, so this only performs the exchange.
+        refresh: async (credential) => {
+          const tokens = await refreshTokens(credential.refresh)
+          return Credential.OAuth.make({
+            type: 'oauth',
+            methodID: MAX_METHOD,
+            ...tokens,
+            metadata: { [AUTH_MODE_KEY]: 'oauth' },
+          })
+        },
+      })
 
-                    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-                      try {
-                        if (attempt > 0) {
-                          const delay = baseDelayMs * 2 ** (attempt - 1)
-                          await new Promise((resolve) =>
-                            setTimeout(resolve, delay),
-                          )
-                        }
-
-                        // Re-read auth to get the latest refresh token.
-                        // The outer `auth` snapshot may be stale if tokens
-                        // were rotated since the fetch() call was made.
-                        const freshAuth = await getAuth()
-
-                        const response = await fetch(TOKEN_URL, {
-                          method: 'POST',
-                          headers: {
-                            'Content-Type': 'application/json',
-                            Accept: 'application/json, text/plain, */*',
-                            'User-Agent': 'axios/1.13.6',
-                          },
-                          body: JSON.stringify({
-                            grant_type: 'refresh_token',
-                            refresh_token: freshAuth.refresh,
-                            client_id: CLIENT_ID,
-                          }),
-                        })
-
-                        if (!response.ok) {
-                          if (response.status >= 500 && attempt < maxRetries) {
-                            await response.body?.cancel()
-                            continue
-                          }
-
-                          const body = await response.text().catch(() => '')
-                          throw new Error(
-                            `Token refresh failed: ${response.status} — ${body}`,
-                          )
-                        }
-
-                        const json = (await response.json()) as {
-                          refresh_token: string
-                          access_token: string
-                          expires_in: number
-                        }
-
-                        // biome-ignore lint/suspicious/noExplicitAny: SDK types don't expose auth.set
-                        await (client as any).auth.set({
-                          path: {
-                            id: 'anthropic',
-                          },
-                          body: {
-                            type: 'oauth',
-                            refresh: json.refresh_token,
-                            access: json.access_token,
-                            expires: Date.now() + json.expires_in * 1000,
-                          },
-                        })
-
-                        return json.access_token
-                      } catch (error) {
-                        const isNetworkError =
-                          error instanceof Error &&
-                          (error.message.includes('fetch failed') ||
-                            ('code' in error &&
-                              (error.code === 'ECONNRESET' ||
-                                error.code === 'ECONNREFUSED' ||
-                                error.code === 'ETIMEDOUT' ||
-                                error.code === 'UND_ERR_CONNECT_TIMEOUT')))
-
-                        if (attempt < maxRetries && isNetworkError) {
-                          continue
-                        }
-
-                        throw error
-                      }
-                    }
-                    // Unreachable — each iteration either returns or throws.
-                    // Kept as a TypeScript exhaustiveness guard.
-                    throw new Error('Token refresh exhausted all retries')
-                  })().finally(() => {
-                    refreshPromise = null
-                  })
-                }
-                auth.access = await refreshPromise
+      integrations.method.update({
+        integrationID: INTEGRATION_ID,
+        method: {
+          id: CONSOLE_METHOD,
+          type: 'oauth',
+          label: 'Create an API Key',
+        },
+        authorize: async () => {
+          const result = await authorize('console')
+          return {
+            mode: 'code',
+            url: result.url,
+            instructions: 'Paste the authorization code here:',
+            callback: async (code: string) => {
+              const tokens = await exchange(
+                code,
+                result.verifier,
+                result.redirectUri,
+                result.state,
+              )
+              if (tokens.type === 'failed') {
+                throw new Error('Authorization code exchange failed')
               }
-
-              const requestHeaders = mergeHeaders(input, init)
-              // biome-ignore lint/style/noNonNullAssertion: access is guaranteed set above
-              setOAuthHeaders(requestHeaders, auth.access!)
-
-              let body = init?.body
-              if (body && typeof body === 'string') {
-                body = rewriteRequestBody(body)
+              const response = await fetch(
+                'https://api.anthropic.com/api/oauth/claude_cli/create_api_key',
+                {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    authorization: `Bearer ${tokens.access}`,
+                  },
+                },
+              )
+              if (!response.ok) {
+                throw new Error(`API key creation failed: ${response.status}`)
               }
-
-              const rewritten = rewriteUrl(input)
-
-              const response = await fetch(rewritten.input, {
-                ...init,
-                body,
-                headers: requestHeaders,
-                ...(isInsecure() && { tls: { rejectUnauthorized: false } }),
+              const created = (await response.json()) as { raw_key: string }
+              // The minted key never expires and has nothing to refresh, so it
+              // is stored as a non-expiring credential with no refresh token.
+              return Credential.OAuth.make({
+                type: 'oauth',
+                methodID: CONSOLE_METHOD,
+                access: created.raw_key,
+                refresh: '',
+                expires: 0,
+                metadata: { [AUTH_MODE_KEY]: 'api-key' },
               })
-
-              return createStrippedStream(response)
             },
           }
-        }
+        },
+      })
+    })
 
-        return {}
-      },
-      methods: [
-        {
-          label: 'Claude Pro/Max',
-          type: 'oauth',
-          authorize: async () => {
-            const result = await authorize('max')
-            return {
-              url: result.url,
-              instructions: 'Paste the authorization code here:',
-              method: 'code',
-              callback: async (code: string) => {
-                return exchange(
-                  code,
-                  result.verifier,
-                  result.redirectUri,
-                  result.state,
-                )
-              },
-            }
-          },
-        },
-        {
-          label: 'Create an API Key',
-          type: 'oauth',
-          authorize: async () => {
-            const result = await authorize('console')
-            return {
-              url: result.url,
-              instructions: 'Paste the authorization code here:',
-              method: 'code',
-              callback: async (code: string) => {
-                const credentials = await exchange(
-                  code,
-                  result.verifier,
-                  result.redirectUri,
-                  result.state,
-                )
-                if (credentials.type === 'failed') return credentials
-                const apiKey = await fetch(
-                  `https://api.anthropic.com/api/oauth/claude_cli/create_api_key`,
-                  {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      authorization: `Bearer ${credentials.access}`,
-                    },
-                  },
-                ).then((r) => r.json() as Promise<{ raw_key: string }>)
-                return { type: 'success' as const, key: apiKey.raw_key }
-              },
-            }
-          },
-        },
-        {
-          provider: 'anthropic',
-          label: 'Manually enter API Key',
-          type: 'api',
-        },
-      ],
-    },
-    // biome-ignore lint/suspicious/noExplicitAny: Plugin type doesn't include undocumented auth/hooks
-  } as any
+    await ctx.catalog.transform((catalog) => {
+      if (!mode) return
+      const record = catalog.provider.get(INTEGRATION_ID)
+      if (!record) return
+
+      // Route the provider through this plugin's package so the Claude Code
+      // request/response rewrites apply.
+      catalog.provider.update(INTEGRATION_ID, (provider) => {
+        provider.package = PROVIDER_PACKAGE
+      })
+
+      for (const model of record.models.values()) {
+        // A per-model package would shadow the provider one.
+        if (model.package !== undefined) model.package = PROVIDER_PACKAGE
+        // Subscription usage is not billed per token.
+        if (mode === 'oauth') {
+          model.cost = model.cost.map((cost) => ({ ...cost, ...FREE }))
+        }
+      }
+    })
+
+    const sync = async () => {
+      const next = await readMode()
+      if (next === mode) return
+      mode = next
+      await ctx.catalog.reload()
+    }
+
+    await sync()
+
+    // Track connection changes so a login/logout re-derives the mode and
+    // replays the catalog transform.
+    const controller = new AbortController()
+    void (async () => {
+      for await (const event of ctx.event.subscribe({
+        signal: controller.signal,
+      })) {
+        if (event.type !== 'integration.connection.updated') continue
+        if (event.data.integrationID !== INTEGRATION_ID) continue
+        await sync()
+      }
+    })().catch(() => {})
+
+    // Aborting is the whole teardown; the watcher is never awaited so a
+    // stream that ignores the signal cannot wedge plugin shutdown.
+    return () => controller.abort()
+  },
+})
+
+async function credentialFrom(
+  methodID: Integration.MethodID,
+  authMode: AuthMode,
+  code: string,
+  result: { verifier: string; redirectUri: string; state: string },
+) {
+  const tokens = await exchange(
+    code,
+    result.verifier,
+    result.redirectUri,
+    result.state,
+  )
+  if (tokens.type === 'failed') {
+    throw new Error('Authorization code exchange failed')
+  }
+  return Credential.OAuth.make({
+    type: 'oauth',
+    methodID,
+    access: tokens.access,
+    refresh: tokens.refresh,
+    expires: tokens.expires,
+    metadata: { [AUTH_MODE_KEY]: authMode },
+  })
 }

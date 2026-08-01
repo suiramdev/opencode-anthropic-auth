@@ -1,9 +1,10 @@
-import { existsSync, unlinkSync } from 'node:fs'
+import { lstatSync, unlinkSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const SYMLINK_PATH = resolve(import.meta.dirname, '..', '.opencode', 'plugins', 'anthropic-auth.js')
+const SYMLINK_PATH = resolve(import.meta.dirname, '..', '.opencode', 'plugins', 'anthropic-auth')
 
-if (existsSync(SYMLINK_PATH)) {
+// existsSync follows the link, so a dangling one would look absent.
+if (lstatSync(SYMLINK_PATH, { throwIfNoEntry: false })) {
   unlinkSync(SYMLINK_PATH)
   console.log('[dev:clean] Removed symlink')
 } else {
