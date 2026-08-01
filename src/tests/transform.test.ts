@@ -6,80 +6,24 @@ import {
   REQUIRED_BETAS,
 } from '../constants'
 import {
-  createStrippedStream,
   isInsecure,
   mergeBetaHeaders,
-  mergeHeaders,
   prefixToolNames,
   prependClaudeCodeIdentity,
+  resolveApiBaseUrl,
   rewriteRequestBody,
-  rewriteUrl,
   sanitizeSystemText,
   setOAuthHeaders,
   stripToolPrefix,
 } from '../transform'
 
-describe('mergeHeaders', () => {
-  test('copies headers from a Request object', () => {
-    const request = new Request('https://example.com', {
-      headers: { 'x-custom': 'value' },
-    })
-    const headers = mergeHeaders(request)
-    expect(headers.get('x-custom')).toBe('value')
-  })
-
-  test('copies headers from init Headers object', () => {
-    const headers = mergeHeaders('https://example.com', {
-      headers: new Headers({ 'x-init': 'from-headers' }),
-    })
-    expect(headers.get('x-init')).toBe('from-headers')
-  })
-
-  test('copies headers from init array', () => {
-    const headers = mergeHeaders('https://example.com', {
-      headers: [['x-arr', 'from-array']],
-    })
-    expect(headers.get('x-arr')).toBe('from-array')
-  })
-
-  test('copies headers from init plain object', () => {
-    const headers = mergeHeaders('https://example.com', {
-      headers: { 'x-obj': 'from-object' },
-    })
-    expect(headers.get('x-obj')).toBe('from-object')
-  })
-
-  test('init headers override Request headers', () => {
-    const request = new Request('https://example.com', {
-      headers: { 'x-key': 'from-request' },
-    })
-    const headers = mergeHeaders(request, {
-      headers: { 'x-key': 'from-init' },
-    })
-    expect(headers.get('x-key')).toBe('from-init')
-  })
-
-  test('handles string input without init', () => {
-    const headers = mergeHeaders('https://example.com')
-    expect([...headers.entries()]).toHaveLength(0)
-  })
-
-  test('handles URL input', () => {
-    const headers = mergeHeaders(new URL('https://example.com'))
-    expect([...headers.entries()]).toHaveLength(0)
-  })
-})
-
 describe('mergeBetaHeaders', () => {
   test('includes required betas when no incoming betas', () => {
-    const headers = new Headers()
-    const result = mergeBetaHeaders(headers)
-    expect(result).toBe(REQUIRED_BETAS.join(','))
+    expect(mergeBetaHeaders({})).toBe(REQUIRED_BETAS.join(','))
   })
 
   test('merges incoming betas with required betas', () => {
-    const headers = new Headers({ 'anthropic-beta': 'custom-beta-1' })
-    const result = mergeBetaHeaders(headers)
+    const result = mergeBetaHeaders({ 'anthropic-beta': 'custom-beta-1' })
 
     for (const beta of REQUIRED_BETAS) {
       expect(result).toContain(beta)
@@ -89,50 +33,60 @@ describe('mergeBetaHeaders', () => {
 
   test('deduplicates betas', () => {
     const beta = REQUIRED_BETAS[0] ?? ''
-    const headers = new Headers({
-      'anthropic-beta': beta,
-    })
-    const result = mergeBetaHeaders(headers)
-    const parts = result.split(',')
-    const occurrences = parts.filter((p) => p === REQUIRED_BETAS[0])
+    const result = mergeBetaHeaders({ 'anthropic-beta': beta })
+    const occurrences = result.split(',').filter((p) => p === beta)
     expect(occurrences).toHaveLength(1)
   })
 
   test('handles comma-separated incoming betas', () => {
-    const headers = new Headers({
-      'anthropic-beta': 'beta-a, beta-b',
-    })
-    const result = mergeBetaHeaders(headers)
+    const result = mergeBetaHeaders({ 'anthropic-beta': 'beta-a, beta-b' })
     expect(result).toContain('beta-a')
     expect(result).toContain('beta-b')
+  })
+
+  test('reads the incoming header regardless of case', () => {
+    const result = mergeBetaHeaders({ 'Anthropic-Beta': 'beta-cased' })
+    expect(result).toContain('beta-cased')
   })
 })
 
 describe('setOAuthHeaders', () => {
   test('sets authorization bearer token', () => {
-    const headers = new Headers()
+    const headers: Record<string, string> = {}
     setOAuthHeaders(headers, 'my-token')
-    expect(headers.get('authorization')).toBe('Bearer my-token')
+    expect(headers.authorization).toBe('Bearer my-token')
   })
 
   test('sets user-agent', () => {
-    const headers = new Headers()
+    const headers: Record<string, string> = {}
     setOAuthHeaders(headers, 'token')
-    expect(headers.get('user-agent')).toContain('claude-cli')
+    expect(headers['user-agent']).toContain('claude-cli')
   })
 
   test('removes x-api-key', () => {
-    const headers = new Headers({ 'x-api-key': 'sk-ant-xxx' })
+    const headers: Record<string, string> = { 'x-api-key': 'sk-ant-xxx' }
     setOAuthHeaders(headers, 'token')
-    expect(headers.get('x-api-key')).toBeNull()
+    expect(headers['x-api-key']).toBeUndefined()
+  })
+
+  test('removes x-api-key regardless of case', () => {
+    const headers: Record<string, string> = { 'X-Api-Key': 'sk-ant-xxx' }
+    setOAuthHeaders(headers, 'token')
+    expect(Object.keys(headers)).not.toContain('X-Api-Key')
+  })
+
+  test('overwrites an existing differently-cased header in place', () => {
+    const headers: Record<string, string> = { Authorization: 'Bearer stale' }
+    setOAuthHeaders(headers, 'fresh')
+    expect(headers.Authorization).toBe('Bearer fresh')
+    expect(headers.authorization).toBeUndefined()
   })
 
   test('sets anthropic-beta header', () => {
-    const headers = new Headers()
+    const headers: Record<string, string> = {}
     setOAuthHeaders(headers, 'token')
-    expect(headers.get('anthropic-beta')).toBeString()
     for (const beta of REQUIRED_BETAS) {
-      expect(headers.get('anthropic-beta')).toContain(beta)
+      expect(headers['anthropic-beta']).toContain(beta)
     }
   })
 })
@@ -222,7 +176,7 @@ describe('stripToolPrefix', () => {
   })
 })
 
-describe('rewriteUrl', () => {
+describe('resolveApiBaseUrl', () => {
   const originalEnv = process.env.ANTHROPIC_BASE_URL
 
   afterEach(() => {
@@ -233,121 +187,44 @@ describe('rewriteUrl', () => {
     }
   })
 
-  test('adds beta=true to /v1/messages URL string', () => {
-    const { input } = rewriteUrl('https://api.anthropic.com/v1/messages')
-    const url = new URL(input.toString())
-    expect(url.searchParams.get('beta')).toBe('true')
+  test('defaults to the Anthropic API', () => {
+    delete process.env.ANTHROPIC_BASE_URL
+    expect(resolveApiBaseUrl()).toBe('https://api.anthropic.com/v1')
   })
 
-  test('adds beta=true to /v1/messages URL object', () => {
-    const { input } = rewriteUrl(
-      new URL('https://api.anthropic.com/v1/messages'),
-    )
-    const url = input instanceof URL ? input : new URL(input.toString())
-    expect(url.searchParams.get('beta')).toBe('true')
-  })
-
-  test('adds beta=true to /v1/messages Request', () => {
-    const request = new Request('https://api.anthropic.com/v1/messages')
-    const { input } = rewriteUrl(request)
-    const url = new URL((input as Request).url)
-    expect(url.searchParams.get('beta')).toBe('true')
-  })
-
-  test('does not modify URL if beta param already exists', () => {
-    const original = 'https://api.anthropic.com/v1/messages?beta=false'
-    const { input } = rewriteUrl(original)
-    const url = new URL(input.toString())
-    expect(url.searchParams.get('beta')).toBe('false')
-  })
-
-  test('does not modify non-/v1/messages URLs', () => {
-    const original = 'https://api.anthropic.com/v1/complete'
-    const { input } = rewriteUrl(original)
-    const url = new URL(input.toString())
-    expect(url.searchParams.has('beta')).toBe(false)
-  })
-
-  test('overrides origin when ANTHROPIC_BASE_URL is set', () => {
+  test('overrides the origin and keeps the /v1 prefix', () => {
     process.env.ANTHROPIC_BASE_URL = 'http://localhost:8080'
-    const { input } = rewriteUrl('https://api.anthropic.com/v1/messages')
-    const url = new URL(input.toString())
-    expect(url.origin).toBe('http://localhost:8080')
-    expect(url.pathname).toBe('/v1/messages')
+    expect(resolveApiBaseUrl()).toBe('http://localhost:8080/v1')
   })
 
-  test('preserves beta=true when ANTHROPIC_BASE_URL is set', () => {
-    process.env.ANTHROPIC_BASE_URL = 'http://localhost:8080'
-    const { input } = rewriteUrl('https://api.anthropic.com/v1/messages')
-    const url = new URL(input.toString())
-    expect(url.searchParams.get('beta')).toBe('true')
-  })
-
-  test('preserves existing query params when ANTHROPIC_BASE_URL is set', () => {
-    process.env.ANTHROPIC_BASE_URL = 'http://localhost:8080'
-    const { input } = rewriteUrl(
-      'https://api.anthropic.com/v1/messages?foo=bar',
-    )
-    const url = new URL(input.toString())
-    expect(url.origin).toBe('http://localhost:8080')
-    expect(url.searchParams.get('foo')).toBe('bar')
-  })
-
-  test('handles ANTHROPIC_BASE_URL with trailing slash', () => {
+  test('handles a trailing slash', () => {
     process.env.ANTHROPIC_BASE_URL = 'http://localhost:8080/'
-    const { input } = rewriteUrl('https://api.anthropic.com/v1/messages')
-    const url = new URL(input.toString())
-    expect(url.pathname).toBe('/v1/messages')
-    expect(url.origin).toBe('http://localhost:8080')
+    expect(resolveApiBaseUrl()).toBe('http://localhost:8080/v1')
   })
 
-  test('ignores invalid ANTHROPIC_BASE_URL', () => {
+  test('ignores a path on the override', () => {
+    process.env.ANTHROPIC_BASE_URL = 'http://localhost:8080/proxy'
+    expect(resolveApiBaseUrl()).toBe('http://localhost:8080/v1')
+  })
+
+  test('ignores an invalid override', () => {
     process.env.ANTHROPIC_BASE_URL = 'not-a-url'
-    const { input } = rewriteUrl('https://api.anthropic.com/v1/messages')
-    const url = new URL(input.toString())
-    expect(url.origin).toBe('https://api.anthropic.com')
+    expect(resolveApiBaseUrl()).toBe('https://api.anthropic.com/v1')
   })
 
-  test('ignores empty ANTHROPIC_BASE_URL', () => {
+  test('ignores an empty override', () => {
     process.env.ANTHROPIC_BASE_URL = ''
-    const { input } = rewriteUrl('https://api.anthropic.com/v1/messages')
-    const url = new URL(input.toString())
-    expect(url.origin).toBe('https://api.anthropic.com')
+    expect(resolveApiBaseUrl()).toBe('https://api.anthropic.com/v1')
   })
 
-  test('rejects file: scheme in ANTHROPIC_BASE_URL', () => {
+  test('rejects a file: scheme', () => {
     process.env.ANTHROPIC_BASE_URL = 'file:///etc/passwd'
-    const { input } = rewriteUrl('https://api.anthropic.com/v1/messages')
-    const url = new URL(input.toString())
-    expect(url.origin).toBe('https://api.anthropic.com')
+    expect(resolveApiBaseUrl()).toBe('https://api.anthropic.com/v1')
   })
 
-  test('rejects ANTHROPIC_BASE_URL with embedded credentials', () => {
+  test('rejects embedded credentials', () => {
     process.env.ANTHROPIC_BASE_URL = 'http://user:pass@localhost:8080'
-    const { input } = rewriteUrl('https://api.anthropic.com/v1/messages')
-    const url = new URL(input.toString())
-    expect(url.origin).toBe('https://api.anthropic.com')
-  })
-
-  test('returns original input when no URL changes are needed', () => {
-    const original = 'https://api.anthropic.com/v1/complete'
-    const { input } = rewriteUrl(original)
-    expect(input).toBe(original)
-  })
-
-  test('returns original Request when no URL changes are needed', () => {
-    const request = new Request('https://api.anthropic.com/v1/complete')
-    const { input } = rewriteUrl(request)
-    expect(input).toBe(request)
-  })
-
-  test('overrides origin for Request input when ANTHROPIC_BASE_URL is set', () => {
-    process.env.ANTHROPIC_BASE_URL = 'http://localhost:8080'
-    const request = new Request('https://api.anthropic.com/v1/messages')
-    const { input } = rewriteUrl(request)
-    const url = new URL((input as Request).url)
-    expect(url.origin).toBe('http://localhost:8080')
-    expect(url.pathname).toBe('/v1/messages')
+    expect(resolveApiBaseUrl()).toBe('https://api.anthropic.com/v1')
   })
 })
 
@@ -402,58 +279,6 @@ describe('isInsecure', () => {
     process.env.ANTHROPIC_BASE_URL = 'https://proxy.local'
     process.env.ANTHROPIC_INSECURE = 'yes'
     expect(isInsecure()).toBe(false)
-  })
-})
-
-describe('createStrippedStream', () => {
-  test('strips tool prefixes from streamed response body', async () => {
-    const chunks = [
-      'data: {"type":"content_block_start","content_block":{"type":"tool_use","name":"mcp_bash"}}\n\n',
-      'data: {"type":"content_block_start","content_block":{"type":"tool_use","name":"mcp_read"}}\n\n',
-    ]
-
-    const stream = new ReadableStream({
-      start(controller) {
-        const encoder = new TextEncoder()
-        for (const chunk of chunks) {
-          controller.enqueue(encoder.encode(chunk))
-        }
-        controller.close()
-      },
-    })
-
-    const original = new Response(stream, { status: 200 })
-    const stripped = createStrippedStream(original)
-
-    const text = await stripped.text()
-    expect(text).toContain('"name": "bash"')
-    expect(text).toContain('"name": "read"')
-    expect(text).not.toContain('mcp_bash')
-    expect(text).not.toContain('mcp_read')
-  })
-
-  test('preserves response status and headers', async () => {
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.close()
-      },
-    })
-
-    const original = new Response(stream, {
-      status: 201,
-      statusText: 'Created',
-      headers: { 'x-custom': 'value' },
-    })
-
-    const stripped = createStrippedStream(original)
-    expect(stripped.status).toBe(201)
-    expect(stripped.headers.get('x-custom')).toBe('value')
-  })
-
-  test('returns original response if no body', () => {
-    const original = new Response(null, { status: 204 })
-    const result = createStrippedStream(original)
-    expect(result).toBe(original)
   })
 })
 

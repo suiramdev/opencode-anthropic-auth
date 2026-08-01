@@ -1,3 +1,30 @@
+/** Plugin id used by OpenCode v2 to enable/disable this plugin. */
+export const PLUGIN_ID = 'ex-machina.anthropic-auth'
+
+/** Integration OpenCode derives from the `anthropic` provider. */
+export const INTEGRATION_ID = 'anthropic'
+
+/** OAuth method id for the Claude Pro/Max subscription flow. */
+export const METHOD_MAX = 'claude-pro-max'
+
+/** OAuth method id for the console flow that mints a long-lived API key. */
+export const METHOD_CONSOLE = 'claude-console-key'
+
+/**
+ * Credential metadata key carrying the auth mode into provider settings.
+ *
+ * OpenCode flattens `Credential.metadata` into the settings object handed to a
+ * native provider package, but only exposes the secret itself as `apiKey`.
+ * The marker is how `provider.ts` tells a subscription token (bearer + Claude
+ * Code spoofing) apart from a plain API key (`x-api-key`, no spoofing).
+ */
+export const AUTH_MODE_KEY = 'anthropicAuthMode'
+
+export type AuthMode = 'oauth' | 'api-key'
+
+/** Anthropic Messages base URL, including the `/v1` prefix. */
+export const DEFAULT_BASE_URL = 'https://api.anthropic.com/v1'
+
 export const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 
 export const AUTHORIZE_URLS = {

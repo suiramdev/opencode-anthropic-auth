@@ -2,6 +2,7 @@ import { buildBillingHeaderValue } from './cch.ts'
 import {
   CLAUDE_CODE_ENTRYPOINT,
   CLAUDE_CODE_IDENTITY,
+  DEFAULT_BASE_URL,
   OPENCODE_IDENTITY_PREFIX,
   PARAGRAPH_REMOVAL_ANCHORS,
   REQUIRED_BETAS,
@@ -9,6 +10,7 @@ import {
   TOOL_PREFIX,
   USER_AGENT,
 } from './constants.ts'
+import { isRecord } from './guards.ts'
 
 /**
  * Prefix a tool name with TOOL_PREFIX and uppercase the first character.
@@ -30,52 +32,45 @@ function unprefixName(name: string): string {
   return `${name.charAt(0).toLowerCase()}${name.slice(1)}`
 }
 
-export type FetchInput = string | URL | Request
-
 /**
- * Merge headers from a Request object and/or a RequestInit headers value
- * into a single Headers instance.
+ * Mutable header bag of an outbound request, as handed to a route transport.
+ *
+ * Keys arrive in whatever case the protocol wrote them, so every read is a
+ * case-insensitive scan and every write reuses the existing key when present.
  */
-export function mergeHeaders(input: FetchInput, init?: RequestInit): Headers {
-  const headers = new Headers()
+export type HeaderRecord = Record<string, string>
 
-  if (input instanceof Request) {
-    input.headers.forEach((value, key) => {
-      headers.set(key, value)
-    })
-  }
+function headerKey(headers: HeaderRecord, name: string): string | undefined {
+  const lowered = name.toLowerCase()
+  return Object.keys(headers).find((key) => key.toLowerCase() === lowered)
+}
 
-  const initHeaders = init?.headers
-  if (initHeaders) {
-    if (initHeaders instanceof Headers) {
-      initHeaders.forEach((value, key) => {
-        headers.set(key, value)
-      })
-    } else if (Array.isArray(initHeaders)) {
-      for (const entry of initHeaders) {
-        const [key, value] = entry as [string, string]
-        if (typeof value !== 'undefined') {
-          headers.set(key, String(value))
-        }
-      }
-    } else {
-      for (const [key, value] of Object.entries(initHeaders)) {
-        if (typeof value !== 'undefined') {
-          headers.set(key, String(value))
-        }
-      }
-    }
-  }
+export function getHeader(
+  headers: HeaderRecord,
+  name: string,
+): string | undefined {
+  const key = headerKey(headers, name)
+  return key === undefined ? undefined : headers[key]
+}
 
-  return headers
+export function setHeader(
+  headers: HeaderRecord,
+  name: string,
+  value: string,
+): void {
+  headers[headerKey(headers, name) ?? name] = value
+}
+
+export function deleteHeader(headers: HeaderRecord, name: string): void {
+  const key = headerKey(headers, name)
+  if (key !== undefined) delete headers[key]
 }
 
 /**
  * Merge incoming beta headers with the required OAuth betas, deduplicating.
  */
-export function mergeBetaHeaders(headers: Headers): string {
-  const incomingBeta = headers.get('anthropic-beta') || ''
-  const incomingBetasList = incomingBeta
+export function mergeBetaHeaders(headers: HeaderRecord): string {
+  const incomingBetasList = (getHeader(headers, 'anthropic-beta') ?? '')
     .split(',')
     .map((b) => b.trim())
     .filter(Boolean)
@@ -88,13 +83,13 @@ export function mergeBetaHeaders(headers: Headers): string {
  * Removes x-api-key since we're using OAuth.
  */
 export function setOAuthHeaders(
-  headers: Headers,
+  headers: HeaderRecord,
   accessToken: string,
-): Headers {
-  headers.set('authorization', `Bearer ${accessToken}`)
-  headers.set('anthropic-beta', mergeBetaHeaders(headers))
-  headers.set('user-agent', USER_AGENT)
-  headers.delete('x-api-key')
+): HeaderRecord {
+  setHeader(headers, 'authorization', `Bearer ${accessToken}`)
+  setHeader(headers, 'anthropic-beta', mergeBetaHeaders(headers))
+  setHeader(headers, 'user-agent', USER_AGENT)
+  deleteHeader(headers, 'x-api-key')
   return headers
 }
 
@@ -181,52 +176,15 @@ function resolveBaseUrl(): URL | null {
 }
 
 /**
- * Rewrite the request URL to add ?beta=true for /v1/messages requests.
- * When ANTHROPIC_BASE_URL is set, overrides the origin (protocol + host)
- * for all API requests flowing through the fetch wrapper.
- * Returns the modified input and URL (if applicable).
+ * Resolve the Anthropic Messages base URL, honouring `ANTHROPIC_BASE_URL`.
+ *
+ * The override replaces only the origin; the `/v1` prefix stays so the route
+ * keeps addressing `/v1/messages` on the proxy.
  */
-export function rewriteUrl(input: FetchInput): {
-  input: FetchInput
-  url: URL | null
-} {
-  let requestUrl: URL | null = null
-  try {
-    if (typeof input === 'string' || input instanceof URL) {
-      requestUrl = new URL(input.toString())
-    } else if (input instanceof Request) {
-      requestUrl = new URL(input.url)
-    }
-  } catch {
-    requestUrl = null
-  }
-
-  if (!requestUrl) return { input, url: null }
-
-  const originalHref = requestUrl.href
-
-  const baseUrl = resolveBaseUrl()
-  if (baseUrl) {
-    requestUrl.protocol = baseUrl.protocol
-    requestUrl.host = baseUrl.host
-  }
-
-  if (
-    requestUrl.pathname === '/v1/messages' &&
-    !requestUrl.searchParams.has('beta')
-  ) {
-    requestUrl.searchParams.set('beta', 'true')
-  }
-
-  if (requestUrl.href === originalHref) {
-    return { input, url: requestUrl }
-  }
-
-  const newInput =
-    input instanceof Request
-      ? new Request(requestUrl.toString(), input)
-      : requestUrl
-  return { input: newInput, url: requestUrl }
+export function resolveApiBaseUrl(): string {
+  const override = resolveBaseUrl()
+  if (!override) return DEFAULT_BASE_URL
+  return `${override.origin}/v1`
 }
 
 /**
@@ -272,10 +230,6 @@ export function sanitizeSystemText(text: string): string {
 }
 
 type SystemBlock = { type: string; text: string; [k: string]: unknown }
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value != null && typeof value === 'object' && !Array.isArray(value)
-}
 
 /**
  * Sanitize system prompt and prepend Claude Code identity.
@@ -362,35 +316,4 @@ export function rewriteRequestBody(body: string): string {
   } catch {
     return body
   }
-}
-
-/**
- * Create a streaming response that strips the tool prefix from tool names.
- */
-export function createStrippedStream(response: Response): Response {
-  if (!response.body) return response
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  const encoder = new TextEncoder()
-
-  const stream = new ReadableStream({
-    async pull(controller) {
-      const { done, value } = await reader.read()
-      if (done) {
-        controller.close()
-        return
-      }
-
-      let text = decoder.decode(value, { stream: true })
-      text = stripToolPrefix(text)
-      controller.enqueue(encoder.encode(text))
-    },
-  })
-
-  return new Response(stream, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  })
 }

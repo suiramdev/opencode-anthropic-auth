@@ -1,21 +1,19 @@
-import {
-  existsSync,
-  mkdirSync,
-  readlinkSync,
-  symlinkSync,
-  unlinkSync,
-} from 'node:fs'
+import { lstatSync, mkdirSync, readlinkSync, symlinkSync, unlinkSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const PROJECT_ROOT = resolve(import.meta.dirname!, '..')
 const PLUGINS_DIR = resolve(PROJECT_ROOT, '.opencode', 'plugins')
-const SYMLINK_PATH = resolve(PLUGINS_DIR, 'anthropic-auth.js')
-const TARGET = '../../dist/index.js' // relative from .opencode/plugins/
+// OpenCode v2 loads an immediate child directory of .opencode/plugins/ as a
+// package. Linking the whole dist keeps provider.js beside index.js, which the
+// plugin resolves relative to its own module URL.
+const SYMLINK_PATH = resolve(PLUGINS_DIR, 'anthropic-auth')
+const TARGET = '../../dist' // relative from .opencode/plugins/
 
 function createSymlink() {
   mkdirSync(PLUGINS_DIR, { recursive: true })
 
-  if (existsSync(SYMLINK_PATH)) {
+  // existsSync follows the link, so a dangling one would look absent.
+  if (lstatSync(SYMLINK_PATH, { throwIfNoEntry: false })) {
     try {
       const current = readlinkSync(SYMLINK_PATH)
       if (current === TARGET) {

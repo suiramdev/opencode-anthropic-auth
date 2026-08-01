@@ -143,3 +143,83 @@ export async function exchange(
 
   return exchangeCode(callback, verifier, redirectUri)
 }
+
+/**
+ * Exchange a refresh token for a fresh access token.
+ *
+ * OpenCode v2 owns refresh scheduling: it calls the integration method's
+ * `refresh` whenever a stored credential is within five minutes of expiry and
+ * persists the result, so this only has to perform the exchange. Transient
+ * 5xx and network failures are retried with exponential backoff because a
+ * throw here fails the model request that triggered the refresh.
+ */
+export async function refreshTokens(
+  refreshToken: string,
+): Promise<{ access: string; refresh: string; expires: number }> {
+  const maxRetries = 2
+  const baseDelayMs = 500
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const { promise, resolve } = Promise.withResolvers<void>()
+      setTimeout(resolve, baseDelayMs * 2 ** (attempt - 1))
+      await promise
+    }
+
+    let response: Response
+    try {
+      response = await fetch(TOKEN_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/plain, */*',
+          'User-Agent': 'axios/1.13.6',
+        },
+        body: JSON.stringify({
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken,
+          client_id: CLIENT_ID,
+        }),
+      })
+    } catch (error) {
+      if (attempt < maxRetries && isNetworkError(error)) continue
+      throw error
+    }
+
+    if (!response.ok) {
+      if (response.status >= 500 && attempt < maxRetries) {
+        await response.body?.cancel()
+        continue
+      }
+      const body = await response.text().catch(() => '')
+      throw new Error(`Token refresh failed: ${response.status} — ${body}`)
+    }
+
+    const json = (await response.json()) as {
+      refresh_token: string
+      access_token: string
+      expires_in: number
+    }
+
+    return {
+      access: json.access_token,
+      refresh: json.refresh_token,
+      expires: Date.now() + json.expires_in * 1000,
+    }
+  }
+
+  // Unreachable — each iteration either returns, continues, or throws.
+  throw new Error('Token refresh exhausted all retries')
+}
+
+function isNetworkError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  if (error.message.includes('fetch failed')) return true
+  if (!('code' in error)) return false
+  return (
+    error.code === 'ECONNRESET' ||
+    error.code === 'ECONNREFUSED' ||
+    error.code === 'ETIMEDOUT' ||
+    error.code === 'UND_ERR_CONNECT_TIMEOUT'
+  )
+}
