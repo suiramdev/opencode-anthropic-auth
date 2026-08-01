@@ -1,4 +1,20 @@
-# @ex-machina/opencode-anthropic-auth
+# @suiramdev/opencode-anthropic-auth
+
+## 2.0.0
+
+### Major Changes
+
+- [#1](https://github.com/suiramdev/opencode-anthropic-auth/pull/1) [`1b50675`](https://github.com/suiramdev/opencode-anthropic-auth/commit/1b50675a7594f668e6f33f45e72551e38fc05a56) Thanks [@suiramdev](https://github.com/suiramdev)! - Port the plugin to the OpenCode v2 plugin API and republish under `@suiramdev`. This release requires OpenCode v2 and will not load on v1.
+
+  - The package is now `@suiramdev/opencode-anthropic-auth` and the plugin id is `suiramdev.anthropic-auth`.
+  - The plugin is a `Plugin.define({ id, setup })` default export, configured through `plugins` rather than `plugin`.
+  - Claude Pro/Max and console API-key login are registered as OAuth methods on OpenCode's `anthropic` integration. Token refresh is handled by OpenCode, so the plugin's inflight-refresh guard is gone.
+  - Manual API-key entry is dropped from the plugin; OpenCode ships a `key` method for the `anthropic` integration already.
+  - Request and response rewriting moved from a wrapped `fetch` to a plugin-owned native provider package. v2 serves Anthropic through its own Messages route and exposes no response-side hook, so the package wraps the route transport to keep `mcp_` tool-name prefixing round-tripping.
+  - The provider package honours a `baseURL` configured under `providers.anthropic.settings`, falling back to it when `ANTHROPIC_BASE_URL` is unset. Replacing the stock provider would otherwise silently ignore it.
+  - `ANTHROPIC_INSECURE` now relaxes TLS verification process-wide instead of per request: v2's Effect HTTP client has no per-request TLS control.
+
+Entries below 2.0.0 are inherited from the upstream `@ex-machina/opencode-anthropic-auth`; their links point at that repository.
 
 ## 1.8.1
 

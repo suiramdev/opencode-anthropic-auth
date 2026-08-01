@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   publish:
-    if: github.repository == 'ex-machina-co/opencode-anthropic-auth'
+    if: github.repository == 'suiramdev/opencode-anthropic-auth'
     runs-on: ubuntu-latest
     permissions:
       contents: write

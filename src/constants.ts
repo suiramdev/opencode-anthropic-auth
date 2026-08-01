@@ -1,5 +1,5 @@
 /** Plugin id used by OpenCode v2 to enable/disable this plugin. */
-export const PLUGIN_ID = 'ex-machina.anthropic-auth'
+export const PLUGIN_ID = 'suiramdev.anthropic-auth'
 
 /** Integration OpenCode derives from the `anthropic` provider. */
 export const INTEGRATION_ID = 'anthropic'

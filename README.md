@@ -6,14 +6,14 @@
 > Use your best judgment and don't try to abuse the subscriptions. Plugins like oh-my-openagent are _known_ to trigger bans. Please be careful when using Ralph loops or insanely heavy usage patterns.
 
 > [!IMPORTANT]
-> If you are seeing issues, please try to `rm -rf ~/.cache/opencode/packages/@ex-machina` and check your `opencode.json` config to make sure you're on the latest version.
+> If you are seeing issues, please try to `rm -rf ~/.cache/opencode/packages/@suiramdev` and check your `opencode.json` config to make sure you're on the latest version.
 >
 > Try this FIRST before making an Issue. Thanks!
 
 An [OpenCode](https://github.com/anomalyco/opencode) plugin that provides Anthropic OAuth authentication, enabling Claude Pro/Max users to use their subscription directly with OpenCode.
 
 > [!IMPORTANT]
-> This fork targets **OpenCode v2** and will not load on v1. The v1 plugin API (`auth.loader` returning a custom `fetch`) was removed in v2; see [Porting notes](#porting-notes) for what changed. For OpenCode v1, use [`@ex-machina/opencode-anthropic-auth`](https://github.com/ex-machina-co/opencode-anthropic-auth) instead.
+> This is a fork of [`@ex-machina/opencode-anthropic-auth`](https://github.com/ex-machina-co/opencode-anthropic-auth) targeting **OpenCode v2**; it will not load on v1. The v1 plugin API (`auth.loader` returning a custom `fetch`) was removed in v2 — see [Porting notes](#porting-notes). For OpenCode v1, use the upstream package.
 
 ## Usage
 
@@ -21,7 +21,7 @@ Add the plugin to your OpenCode configuration:
 
 ```json
 {
-  "plugins": ["@ex-machina/opencode-anthropic-auth"]
+  "plugins": ["@suiramdev/opencode-anthropic-auth"]
 }
 ```
 
@@ -36,11 +36,11 @@ Then connect an account with `opencode auth login` and pick **Claude Pro/Max**.
 
 ```json
 {
-  "plugins": ["@ex-machina/opencode-anthropic-auth@2.0.0"]
+  "plugins": ["@suiramdev/opencode-anthropic-auth@2.0.0"]
 }
 ```
 
-The plugin's `id` is `ex-machina.anthropic-auth`; disable it without removing the entry using `"-ex-machina.anthropic-auth"`.
+The plugin's `id` is `suiramdev.anthropic-auth`; disable it without removing the entry using `"-suiramdev.anthropic-auth"`.
 
 ## Authentication Methods
 
@@ -128,7 +128,7 @@ bun run dev:clean
 ```
 
 > [!NOTE]
-> If you have the npm version of this plugin in your global OpenCode config, both will load. Disable the published one with `"-ex-machina.anthropic-auth"` — the two share an `id`, so the later entry wins.
+> If you also have the published package in your global OpenCode config, both will load. Disable the published one with `"-suiramdev.anthropic-auth"` — the two share an `id`, so the later entry wins.
 
 ### Publishing
 

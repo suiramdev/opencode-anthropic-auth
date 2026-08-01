@@ -104,7 +104,7 @@ function methodFor(methods: OAuthMethod[], id: string) {
 
 describe('plugin definition', () => {
   test('exports a stable id and a setup function', () => {
-    expect(plugin.id).toBe('ex-machina.anthropic-auth')
+    expect(plugin.id).toBe('suiramdev.anthropic-auth')
     expect(plugin.setup).toBeFunction()
   })
 })
