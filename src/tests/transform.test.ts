@@ -192,6 +192,27 @@ describe('resolveApiBaseUrl', () => {
     expect(resolveApiBaseUrl()).toBe('https://api.anthropic.com/v1')
   })
 
+  test('falls back to a configured baseURL', () => {
+    delete process.env.ANTHROPIC_BASE_URL
+    // This package replaces the stock provider, so a baseURL OpenCode would
+    // have honoured must still be honoured here.
+    expect(resolveApiBaseUrl('https://gateway.example.com/v1')).toBe(
+      'https://gateway.example.com/v1',
+    )
+  })
+
+  test('ignores a blank configured baseURL', () => {
+    delete process.env.ANTHROPIC_BASE_URL
+    expect(resolveApiBaseUrl('   ')).toBe('https://api.anthropic.com/v1')
+  })
+
+  test('lets the environment override a configured baseURL', () => {
+    process.env.ANTHROPIC_BASE_URL = 'http://localhost:8080'
+    expect(resolveApiBaseUrl('https://gateway.example.com/v1')).toBe(
+      'http://localhost:8080/v1',
+    )
+  })
+
   test('overrides the origin and keeps the /v1 prefix', () => {
     process.env.ANTHROPIC_BASE_URL = 'http://localhost:8080'
     expect(resolveApiBaseUrl()).toBe('http://localhost:8080/v1')

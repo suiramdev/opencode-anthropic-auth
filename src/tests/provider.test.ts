@@ -156,6 +156,16 @@ describe('model', () => {
     expect(built.route.endpoint.baseURL).toBe('http://localhost:8080/v1')
   })
 
+  test('honours a baseURL configured on the provider', () => {
+    delete process.env.ANTHROPIC_BASE_URL
+    const built = model('claude-sonnet-4-5', {
+      apiKey: 'sk-ant-key',
+      baseURL: 'https://gateway.example.com/v1',
+    })
+
+    expect(built.route.endpoint.baseURL).toBe('https://gateway.example.com/v1')
+  })
+
   test('forwards leftover settings as anthropic provider options', () => {
     const built = model('claude-sonnet-4-5', {
       apiKey: 'sk-ant-key',

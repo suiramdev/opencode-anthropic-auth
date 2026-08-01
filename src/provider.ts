@@ -135,8 +135,7 @@ export function model(modelID: string, settings: Settings): Model {
   return AnthropicMessages.route
     .with({
       endpoint: {
-        baseURL: resolveApiBaseUrl(),
-        // Claude Code calls the beta surface; the stock route does not.
+        baseURL: resolveApiBaseUrl(settings.baseURL),
         ...(oauth ? { query: { beta: 'true' } } : {}),
       },
       // In OAuth mode the transport owns every auth header so the Claude Code

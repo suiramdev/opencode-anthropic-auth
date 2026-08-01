@@ -176,15 +176,20 @@ function resolveBaseUrl(): URL | null {
 }
 
 /**
- * Resolve the Anthropic Messages base URL, honouring `ANTHROPIC_BASE_URL`.
+ * Resolve the Anthropic Messages base URL.
  *
- * The override replaces only the origin; the `/v1` prefix stays so the route
- * keeps addressing `/v1/messages` on the proxy.
+ * `ANTHROPIC_BASE_URL` wins, then any `baseURL` configured on the provider,
+ * then the Anthropic default. Because this package replaces the stock
+ * provider, dropping `configured` would silently ignore a `baseURL` OpenCode
+ * would otherwise honour.
+ *
+ * The env override contributes only its origin; the `/v1` prefix stays so the
+ * route keeps addressing `/v1/messages` on the proxy.
  */
-export function resolveApiBaseUrl(): string {
+export function resolveApiBaseUrl(configured?: string): string {
   const override = resolveBaseUrl()
-  if (!override) return DEFAULT_BASE_URL
-  return `${override.origin}/v1`
+  if (override) return `${override.origin}/v1`
+  return configured?.trim() || DEFAULT_BASE_URL
 }
 
 /**
