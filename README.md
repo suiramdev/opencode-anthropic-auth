@@ -101,6 +101,8 @@ The last row is the interesting one. In v2 the `anthropic` provider is served by
 
 So the plugin points the provider's `package` at `dist/provider.js` (a `file://` specifier, which OpenCode imports directly). That module rebuilds the stock Anthropic route with one wrapped transport: outbound requests get the Claude Code headers, URL, and body treatment, and inbound SSE frames get the tool prefix stripped back off. `src/tests/integration.test.ts` drives a real `LLM.stream` through that stack against a local server to catch breaking changes in those (beta, unstable) internals.
 
+Because that package builds on OpenCode's own runtime, `@opencode-ai/ai`, `@opencode-ai/plugin`, `@opencode-ai/schema`, and `effect` are pinned to exact versions matching one OpenCode `next` build. Bump all four together when retargeting a newer OpenCode, and re-run `bun test` — the integration test is what tells you whether the internals still line up.
+
 ## Development
 
 ### Local Testing
