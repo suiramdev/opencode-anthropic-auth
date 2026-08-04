@@ -103,6 +103,41 @@ So the plugin points the provider's `package` at `dist/provider.js` (a `file://`
 
 Because that package builds on OpenCode's own runtime, `@opencode-ai/ai`, `@opencode-ai/plugin`, `@opencode-ai/schema`, and `effect` are pinned to exact versions matching one OpenCode `next` build. Bump all four together when retargeting a newer OpenCode, and re-run `bun test` — the integration test is what tells you whether the internals still line up.
 
+#### Why the pins are exact
+
+A version range cannot stand in for those pins. OpenCode publishes as
+`0.0.0-next-<build>`, and `next-16741` is a *single alphanumeric* SemVer
+prerelease identifier, so builds are ordered **lexically** rather than
+numerically. `^0.0.0-next-16741` therefore resolves to whichever prerelease
+sorts highest as text — in practice a stray branch build:
+
+| dependency | `^0.0.0-next-16741` resolves to |
+|---|---|
+| `@opencode-ai/ai` | `0.0.0-next-16745` |
+| `@opencode-ai/plugin` | `0.0.0-windows-fix-202511131842` |
+| `@opencode-ai/schema` | `0.0.0-reserved.0` |
+
+`w` and `r` both sort above `n`. The same lexical rule means the range would
+stop matching entirely at a six-digit build (`next-100000` < `next-99999`).
+
+The `next` dist-tag *does* resolve cleanly, but OpenCode installs plugins into
+`~/.cache/opencode/packages/<name>/` and writes a `package-lock.json` there, so
+a tag would be frozen to whatever happened to be newest at each user's first
+install — different per machine, unreproducible, and still able to go stale.
+It would also defeat the point of pinning the plugin version, since the pinned
+release would no longer describe what actually gets installed.
+
+`peerDependencies` — normally the right answer for host-coupled packages — is
+not available either: the host ships as a single compiled binary with
+`@opencode-ai/ai` bundled inside it, so there is no copy for a plugin to
+share. Every plugin installs its own.
+
+So the pins stay exact and `.github/workflows/retarget-opencode.yml` does the
+bumping instead: weekly, it moves all three to the build `@opencode-ai/cli`
+currently ships on `next`, runs the full suite, and opens a PR only if that
+passes. Dependabot ignores these packages — it follows `latest`, which for
+them points at the v1 line and at placeholder releases.
+
 ## Development
 
 ### Local Testing

@@ -1,0 +1,112 @@
+name: Retarget OpenCode
+
+# The plugin builds on OpenCode's unstable internals, so the three
+# `@opencode-ai` dependencies are pinned to one exact `next` build (see the
+# "Porting notes" section of the README). A semver range cannot stand in for
+# those pins: `next-16741` is a single alphanumeric prerelease identifier, so
+# it is ordered lexically, and `^0.0.0-next-16741` happily resolves to stray
+# branch builds such as `0.0.0-windows-fix-202511131842`.
+#
+# This job does the bump the pins forbid: it moves all three to whatever the
+# `next` dist-tag currently points at, then runs the suite. `bun test` drives a
+# real `LLM.stream` through the provider stack, so a green run is the signal
+# that the internals still line up. Green opens a PR; red fails loudly here
+# instead of in a user's editor.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: retarget-opencode
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  retarget:
+    if: github.repository == 'suiramdev/opencode-anthropic-auth'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
+      - run: bun install --frozen-lockfile
+
+      # `@opencode-ai/cli` is the host users actually run, and it is what the
+      # plugin has to line up with. Its `next` tag lags the library packages
+      # (`ai` and `schema` publish more often), so tracking "newest of each"
+      # would pin the plugin ahead of every installed host.
+      - name: Resolve the host build
+        id: resolve
+        run: |
+          set -euo pipefail
+          build=$(bun pm view @opencode-ai/cli dist-tags.next)
+          [ -n "$build" ] || { echo "no next tag for @opencode-ai/cli" >&2; exit 1; }
+          echo "Host build: $build"
+          for pkg in ai plugin schema; do
+            bun pm view "@opencode-ai/$pkg" "versions" | grep -q "$build" || {
+              echo "@opencode-ai/$pkg has no $build release" >&2; exit 1; }
+          done
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+      - name: Apply the pins
+        id: pins
+        env:
+          BUILD: ${{ steps.resolve.outputs.build }}
+        run: |
+          set -euo pipefail
+          bun add --exact \
+            "@opencode-ai/ai@$BUILD" \
+            "@opencode-ai/plugin@$BUILD" \
+            "@opencode-ai/schema@$BUILD"
+          if git diff --quiet -- package.json bun.lock; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already on the current next build."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Runs even on a no-op bump: `next` moving under an unchanged pin is
+      # exactly the drift worth catching early.
+      - run: bun run types
+      - run: bun run build
+      - run: bun test
+      - run: bun run format:check
+      - run: bun run lint
+
+      - name: Open a retarget PR
+        if: steps.pins.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD: ${{ steps.resolve.outputs.build }}
+        run: |
+          set -euo pipefail
+          branch="retarget-opencode/$BUILD"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "Branch $branch already exists; nothing to open."
+            exit 0
+          fi
+
+          cat > ".changeset/retarget-$BUILD.md" <<EOF
+          ---
+          "@suiramdev/opencode-anthropic-auth": minor
+          ---
+
+          Retarget the pinned OpenCode runtime to \`$BUILD\`.
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add package.json bun.lock ".changeset/retarget-$BUILD.md"
+          git commit -m "fix: retarget the pinned OpenCode runtime to $BUILD"
+          git push origin "$branch"
+
+          gh pr create \
+            --title "fix: retarget the pinned OpenCode runtime to $BUILD" \
+            --body "$(printf '%s\n' \
+              "Moves the three pinned \`@opencode-ai\` dependencies to \`$BUILD\`, the build \`@opencode-ai/cli\` currently ships on \`next\`." \
+              "" \
+              "Types, build, tests, format and lint all passed against that build before this PR was opened — including the integration test that drives a real \`LLM.stream\` through the provider stack.")"

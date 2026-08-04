@@ -6,6 +6,13 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    # The OpenCode v2 runtime lives on the `next` dist-tag, while `latest`
+    # points at unrelated versions (`@opencode-ai/plugin` 1.18.x is the v1
+    # line; `ai` and `schema` carry placeholder releases). Dependabot follows
+    # `latest`, so for these three it can only ever propose a wrong version.
+    # retarget-opencode.yml tracks them against `next` instead.
+    ignore:
+      - dependency-name: "@opencode-ai/*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
