@@ -1,6 +1,6 @@
 {
   "name": "@suiramdev/opencode-anthropic-auth",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/suiramdev/opencode-anthropic-auth"
@@ -43,9 +43,9 @@
     "release": "bun run build && bun change publish"
   },
   "dependencies": {
-    "@opencode-ai/ai": "0.0.0-next-16671",
-    "@opencode-ai/plugin": "0.0.0-next-16671",
-    "@opencode-ai/schema": "0.0.0-next-16671",
+    "@opencode-ai/ai": "0.0.0-next-16741",
+    "@opencode-ai/plugin": "0.0.0-next-16741",
+    "@opencode-ai/schema": "0.0.0-next-16741",
     "effect": "4.0.0-beta.101"
   },
   "devDependencies": {

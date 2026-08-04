@@ -1,5 +1,17 @@
 # @suiramdev/opencode-anthropic-auth
 
+## 2.1.0
+
+### Minor Changes
+
+- Retarget the pinned OpenCode runtime to `0.0.0-next-16741`.
+
+  `@opencode-ai/ai` renamed its `Model` type to `LanguageModel`, so
+  `ProviderPackage.Definition["model"]` — which `src/provider.ts` implements —
+  no longer type-checked against the previous `0.0.0-next-16671` pin. Bump
+  `@opencode-ai/ai`, `@opencode-ai/plugin`, and `@opencode-ai/schema` together
+  and rename the import.
+
 ## 2.0.0
 
 ### Major Changes

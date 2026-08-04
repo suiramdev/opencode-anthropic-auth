@@ -16,7 +16,7 @@
  */
 
 import type {
-  Model,
+  LanguageModel,
   ProviderOptions,
   ProviderPackageSettings,
 } from '@opencode-ai/ai'
@@ -116,7 +116,7 @@ export function claudeCodeTransport(
  * subscription treatment on when the active credential came from this
  * plugin's Claude Pro/Max OAuth method.
  */
-export function model(modelID: string, settings: Settings): Model {
+export function model(modelID: string, settings: Settings): LanguageModel {
   const oauth = settings[AUTH_MODE_KEY] === 'oauth'
   const secret = settings.apiKey ?? ''
 
