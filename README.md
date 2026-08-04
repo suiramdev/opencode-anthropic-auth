@@ -140,6 +140,19 @@ bun change          # create a changeset describing your changes
 
 When changesets are merged to `main`, CI will automatically open a release PR. Merging that PR publishes to npm.
 
+#### Registry auth
+
+`.github/workflows/publish.yml` publishes with provenance and reads `NODE_AUTH_TOKEN` from the `NPM_TOKEN` secret. Leave that secret unset to publish via [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) (OIDC) instead — the workflow already requests `id-token: write`.
+
+Trusted publishing cannot bootstrap a package that does not exist yet, so the **first** version of a newly named package must be published from a machine with `npm login` credentials:
+
+```bash
+npm login
+bun run release     # build + changeset publish
+```
+
+Afterwards, register `suiramdev/opencode-anthropic-auth` / `publish.yml` (no environment) as the package's trusted publisher on npmjs.com, and every later release goes through CI with no long-lived token.
+
 ## License
 
 MIT
